@@ -1,4 +1,5 @@
 {
+  "buildCommand": "pip install -r requirements.txt && alembic upgrade head && python scripts/seed.py",
   "builds": [
     { "src": "api/index.py", "use": "@vercel/python" }
   ],
