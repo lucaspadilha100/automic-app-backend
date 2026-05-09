@@ -1,4 +1,5 @@
 import logging
+import httpx
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -332,15 +333,60 @@ class AutomationService:
         channel = rule.action_config.get("channel", "internal")
         event_type = rule.action_config.get("event_type", "automation_triggered")
 
+        status = "sent"
+        if channel == "whatsapp":
+            status = self._dispatch_whatsapp(db, rule, event, event_type)
+
         log = NotificationLog(
             tenant_id=rule.tenant_id,
             customer_account_id=event.customer_account_id,
             channel=channel,
             event_type=event_type,
-            status="sent",
+            status=status,
         )
         db.add(log)
         db.flush()
+
+    def _dispatch_whatsapp(
+        self, db: Session, rule: AutomationRule, event: CustomerEvent, event_type: str
+    ) -> str:
+        """POST to the tenant's WhatsApp webhook URL. Returns 'sent' or 'failed'."""
+        try:
+            from app.models.whatsapp import TenantWhatsAppSettings
+            settings = db.query(TenantWhatsAppSettings).filter(
+                TenantWhatsAppSettings.tenant_id == rule.tenant_id,
+                TenantWhatsAppSettings.enabled == True,
+            ).first()
+
+            if not settings or not settings.webhook_url:
+                logger.info("WhatsApp dispatch skipped — no webhook URL configured for tenant %s", rule.tenant_id)
+                return "skipped"
+
+            payload = {
+                "event_type": event_type,
+                "trigger_event": event.event_type,
+                "automation_rule_id": str(rule.id),
+                "automation_name": rule.name,
+                "tenant_id": str(rule.tenant_id),
+                "customer_account_id": str(event.customer_account_id) if event.customer_account_id else None,
+                "tenant_customer_id": str(event.tenant_customer_id) if event.tenant_customer_id else None,
+                "action_config": rule.action_config,
+                "metadata": event.metadata_ or {},
+            }
+
+            response = httpx.post(
+                settings.webhook_url,
+                json=payload,
+                timeout=10.0,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            logger.info("WhatsApp webhook dispatched for rule %s — status %s", rule.id, response.status_code)
+            return "sent"
+
+        except Exception as exc:
+            logger.warning("WhatsApp webhook dispatch failed for rule %s: %s", rule.id, exc)
+            return "failed"
 
 
 automation_service = AutomationService()
