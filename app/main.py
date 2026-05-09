@@ -49,7 +49,7 @@ from app.api.routes.future import router as future_router
 from app.api.routes.customer_portal import router as customer_portal_router
 from app.api.routes.admin_terms import router as admin_terms_router
 from app.api.routes.customer_terms import router as customer_terms_router
-from app.api.routes.admin_procedure_photos import router as admin_procedure_photos_router
+from app.api.routes.admin_procedure_photos import router as admin_procedure_photos_router, history_router as admin_procedure_history_router
 from app.api.routes.customer_procedure_photos import router as customer_procedure_photos_router
 from app.api.routes.admin_commissions import router as admin_commissions_router
 from app.api.routes.admin_custom_forms import router as admin_custom_forms_router
@@ -142,6 +142,7 @@ app.include_router(future_router, prefix=API_V1)
 app.include_router(customer_portal_router, prefix=API_V1)
 app.include_router(admin_terms_router, prefix=API_V1)
 app.include_router(customer_terms_router, prefix=API_V1)
+app.include_router(admin_procedure_history_router, prefix=API_V1)
 app.include_router(admin_procedure_photos_router, prefix=API_V1)
 app.include_router(customer_procedure_photos_router, prefix=API_V1)
 app.include_router(admin_commissions_router, prefix=API_V1)
