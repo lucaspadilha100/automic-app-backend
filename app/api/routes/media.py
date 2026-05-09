@@ -20,21 +20,41 @@ ALLOWED_MIME = {
     "image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"
 }
 
-FILE_TYPE_MAP = {
-    "logo": "logo",
-    "favicon": "favicon",
-    "cover": "cover",
-    "service_image": "service_image",
-    "professional_photo": "professional_photo",
-    "before_after": "before_after",
-}
+
+def _save_local(content: bytes, rel_path: str) -> str:
+    abs_path = os.path.join(os.getcwd(), rel_path)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "wb") as f:
+        f.write(content)
+    return f"/{rel_path}"
 
 
-def _save_local(file: UploadFile, dest_path: str) -> str:
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    with open(dest_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    return dest_path
+def _save_r2(content: bytes, key: str, content_type: str) -> str:
+    import boto3
+    endpoint = f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=settings.R2_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+        region_name="auto",
+    )
+    s3.put_object(
+        Bucket=settings.R2_BUCKET_NAME,
+        Key=key,
+        Body=content,
+        ContentType=content_type,
+    )
+    base = settings.R2_PUBLIC_URL.rstrip("/")
+    return f"{base}/{key}"
+
+
+def save_file(content: bytes, tenant_id, file_type: str, ext: str, content_type: str) -> str:
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    key = f"uploads/{tenant_id}/{file_type}/{unique_name}"
+    if settings.UPLOAD_STORAGE == "r2":
+        return _save_r2(content, key, content_type)
+    return _save_local(content, key)
 
 
 @router.post("/upload")
@@ -47,34 +67,22 @@ async def upload_file(
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ):
-    """Faz upload de um arquivo de mídia (local ou cloud conforme configuração)."""
+    """Faz upload de um arquivo de mídia (local ou Cloudflare R2)."""
 
-    # Validate MIME type
     if file.content_type not in ALLOWED_MIME:
         raise ValidationError(
             f"Tipo de arquivo não permitido: {file.content_type}. "
             f"Permitidos: {', '.join(ALLOWED_MIME)}"
         )
 
-    # Validate size
     content = await file.read()
     if len(content) > settings.max_upload_size_bytes:
         raise ValidationError(
             f"Arquivo muito grande. Máximo permitido: {settings.MAX_UPLOAD_SIZE_MB}MB."
         )
-    await file.seek(0)
 
-    # Build unique filename
     ext = os.path.splitext(file.filename or "file")[1].lower() or ".jpg"
-    unique_name = f"{uuid.uuid4().hex}{ext}"
-    rel_path = f"uploads/{tenant.id}/{file_type}/{unique_name}"
-    abs_path = os.path.join(os.getcwd(), rel_path)
-
-    # Save to local storage (extend here for S3/R2)
-    _save_local(file, abs_path)
-
-    # Serve URL (in prod, replace with CDN URL)
-    file_url = f"/{rel_path}"
+    file_url = save_file(content, tenant.id, file_type, ext, file.content_type)
 
     media = MediaFile(
         tenant_id=tenant.id,
@@ -135,13 +143,29 @@ def delete_media(
     if not media:
         raise NotFoundError("MEDIA_NOT_FOUND", "Arquivo não encontrado.")
 
-    # Try to remove local file
-    try:
-        local_path = os.path.join(os.getcwd(), media.file_url.lstrip("/"))
-        if os.path.exists(local_path):
-            os.remove(local_path)
-    except Exception:
-        pass
+    if settings.UPLOAD_STORAGE == "r2":
+        try:
+            import boto3
+            endpoint = f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                aws_access_key_id=settings.R2_ACCESS_KEY_ID,
+                aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+                region_name="auto",
+            )
+            base = settings.R2_PUBLIC_URL.rstrip("/")
+            key = media.file_url.replace(base + "/", "")
+            s3.delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+        except Exception:
+            pass
+    else:
+        try:
+            local_path = os.path.join(os.getcwd(), media.file_url.lstrip("/"))
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
 
     db.delete(media)
     db.commit()
