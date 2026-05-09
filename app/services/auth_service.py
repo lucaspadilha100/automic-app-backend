@@ -35,6 +35,14 @@ class AuthService:
             "access_token": create_access_token(payload),
             "refresh_token": create_refresh_token(payload),
             "token_type": "bearer",
+            "user": {
+                "id": str(user.id),
+                "name": user.name,
+                "email": user.email,
+                "role": user.role,
+                "tenant_id": str(user.tenant_id) if user.tenant_id else None,
+                "is_active": user.is_active,
+            },
         }
 
     def refresh_tokens(self, db: Session, refresh_token: str) -> dict:
