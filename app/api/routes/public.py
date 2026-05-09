@@ -43,11 +43,13 @@ def get_public_info(slug: str, db: Session = Depends(get_db)):
         },
         "theme": {
             "logo_url": theme.logo_url if theme else None,
+            "cover_image_url": theme.cover_image_url if theme else None,
             "primary_color": theme.primary_color if theme else None,
             "secondary_color": theme.secondary_color if theme else None,
             "background_color": theme.background_color if theme else None,
             "button_color": theme.button_color if theme else None,
             "font_family": theme.font_family if theme else None,
+            "theme_preset": theme.theme_preset if theme else "classic",
         } if theme else {},
         "settings": {
             "show_prices": settings.show_prices if settings else True,
