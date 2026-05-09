@@ -15,6 +15,7 @@ class PhotoType(str, enum.Enum):
 class PhotoVisibility(str, enum.Enum):
     internal = "internal"
     customer_visible = "customer_visible"
+    public = "public"
 
 
 class ProcedurePhoto(Base, UUIDPrimaryKey, TimestampMixin):
