@@ -38,9 +38,16 @@ class Settings(BaseSettings):
     DEFAULT_TIMEZONE: str = "America/Sao_Paulo"
 
     # Uploads
-    UPLOAD_STORAGE: str = "local"
+    UPLOAD_STORAGE: str = "local"  # "local" or "r2"
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
+
+    # Cloudflare R2 (S3-compatible) — required when UPLOAD_STORAGE=r2
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET_NAME: str = ""
+    R2_PUBLIC_URL: str = ""  # ex: https://pub-xxx.r2.dev or custom domain
 
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True

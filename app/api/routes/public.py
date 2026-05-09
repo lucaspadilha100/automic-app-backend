@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 import uuid
 
@@ -12,6 +12,8 @@ from app.models.appointment import Appointment
 from app.models.service import Service, ServiceCategory
 from app.models.professional import Professional
 from app.models.schedule import BusinessHour
+from app.models.procedure_photo import ProcedurePhoto, PhotoVisibility
+from app.models.media import MediaFile
 from app.services.appointment_service import appointment_service
 from app.services.audit_service import audit_service
 from app.schemas.schemas import AppointmentCreate, AppointmentResponse, AppointmentCancelRequest
@@ -226,6 +228,74 @@ def cancel_public(
     appointment_service.cancel(db, appt, "customer", current_customer.id, payload.reason)
     db.commit()
     return {"message": "Agendamento cancelado."}
+
+
+@router.get("/{slug}/photos")
+def get_public_photos(slug: str, limit: int = Query(20, le=50), db: Session = Depends(get_db)):
+    """Fotos públicas do portfólio do tenant."""
+    tenant = get_public_tenant_by_slug(slug, db)
+
+    photos = (
+        db.query(ProcedurePhoto)
+        .join(MediaFile, ProcedurePhoto.media_file_id == MediaFile.id)
+        .filter(
+            ProcedurePhoto.tenant_id == tenant.id,
+            ProcedurePhoto.visibility == PhotoVisibility.public,
+        )
+        .order_by(ProcedurePhoto.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": str(p.id),
+            "photo_type": p.photo_type.value if p.photo_type else "other",
+            "caption": p.caption,
+            "file_url": p.media_file.file_url if p.media_file else None,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in photos
+    ]
+
+
+@router.get("/{slug}/reviews")
+def get_public_reviews(slug: str, limit: int = Query(20, le=50), db: Session = Depends(get_db)):
+    """Avaliações públicas do tenant."""
+    tenant = get_public_tenant_by_slug(slug, db)
+
+    try:
+        from app.models.future import AppointmentReview
+        reviews = (
+            db.query(AppointmentReview)
+            .filter(
+                AppointmentReview.tenant_id == tenant.id,
+                AppointmentReview.visibility == "public",
+            )
+            .order_by(AppointmentReview.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        result = []
+        for r in reviews:
+            reviewer_name = None
+            if r.customer_account:
+                name = r.customer_account.name or ""
+                parts = name.split()
+                reviewer_name = f"{parts[0]} {parts[1][0]}." if len(parts) > 1 else parts[0] if parts else "Cliente"
+
+            result.append({
+                "id": str(r.id),
+                "rating": r.rating,
+                "comment": r.comment,
+                "reviewer_name": reviewer_name,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+
+        return result
+    except Exception:
+        return []
 
 
 @router.get("/{slug}/my-appointments")

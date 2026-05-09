@@ -74,6 +74,14 @@ def register_payment(
     )
 
     customer_event_service.emit(
+        db=db, event_type="payment_created",
+        tenant_id=tenant.id,
+        customer_account_id=appt.customer_account_id,
+        tenant_customer_id=appt.tenant_customer_id,
+        entity_type="payment", entity_id=payment.id,
+    )
+
+    customer_event_service.emit(
         db=db, event_type="payment_confirmed",
         tenant_id=tenant.id,
         customer_account_id=appt.customer_account_id,
