@@ -70,12 +70,16 @@ from app.api.routes.master_ops import router as master_ops_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run migrations on startup as safety net
+    # Run migrations on startup as safety net (timeout prevents Vercel cold-start hang)
     import subprocess, sys
     try:
-        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True)
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True,
+            timeout=25,
+        )
     except Exception:
-        pass  # Don't block startup if alembic fails
+        pass  # Don't block startup if alembic fails or times out
     yield
 from app.api.routes.master_invoices import (
     router as master_invoices_router,
