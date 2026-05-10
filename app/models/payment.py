@@ -11,6 +11,7 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     appointment_id = Column(UUID(as_uuid=True), ForeignKey("appointments.id", ondelete="CASCADE"), nullable=False, index=True)
     customer_account_id = Column(UUID(as_uuid=True), ForeignKey("customer_accounts.id"), nullable=True)
+    registered_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     amount = Column(Numeric(10, 2), nullable=False)
     status = Column(String(20), nullable=False, default="pending")
@@ -24,6 +25,8 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
     paid_at = Column(DateTime(timezone=True), nullable=True)
 
     appointment = relationship("Appointment", back_populates="payments")
+    customer_account = relationship("CustomerAccount")
+    registered_by = relationship("User", foreign_keys=[registered_by_user_id])
 
     __table_args__ = (
         CheckConstraint("amount >= 0", name="ck_payments_amount_non_negative"),
@@ -33,3 +36,4 @@ class Payment(Base, UUIDPrimaryKey, TimestampMixin):
             name="ck_payments_method"
         ),
     )
+

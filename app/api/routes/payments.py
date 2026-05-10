@@ -48,6 +48,7 @@ def register_payment(
         tenant_id=tenant.id,
         appointment_id=appt.id,
         customer_account_id=appt.customer_account_id,
+        registered_by_user_id=current_user.id,
         amount=amount,
         status="paid",
         payment_method=payment_method,
@@ -161,6 +162,76 @@ def list_payments(
         }
         for p in appt.payments
     ]
+
+
+@router.get("")
+def list_payments_all(
+    date: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 200,
+    tenant: Tenant = Depends(require_active_tenant),
+    current_user: User = Depends(require_receptionist_or_above),
+    db: Session = Depends(get_db),
+):
+    """Lista pagamentos detalhados do tenant. Por padrão retorna o dia atual."""
+    from datetime import date as date_type, timedelta
+    from sqlalchemy.orm import joinedload
+
+    q = db.query(Payment).options(
+        joinedload(Payment.customer_account),
+        joinedload(Payment.registered_by),
+        joinedload(Payment.appointment),
+    ).filter(Payment.tenant_id == tenant.id)
+
+    if date:
+        day = date_type.fromisoformat(date)
+        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        q = q.filter(Payment.paid_at >= start, Payment.paid_at < end)
+    elif date_from or date_to:
+        if date_from:
+            d = date_type.fromisoformat(date_from)
+            q = q.filter(Payment.paid_at >= datetime(d.year, d.month, d.day, tzinfo=timezone.utc))
+        if date_to:
+            d = date_type.fromisoformat(date_to)
+            q = q.filter(Payment.paid_at < datetime(d.year, d.month, d.day, tzinfo=timezone.utc) + timedelta(days=1))
+    else:
+        today = date_type.today()
+        start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        q = q.filter(Payment.paid_at >= start, Payment.paid_at < start + timedelta(days=1))
+
+    if status:
+        q = q.filter(Payment.status == status)
+
+    payments = q.order_by(Payment.paid_at.desc()).offset(skip).limit(limit).all()
+
+    result = []
+    for p in payments:
+        appt = p.appointment
+        service_name = None
+        if appt and appt.appointment_services:
+            service_name = appt.appointment_services[0].service_name_snapshot
+
+        registered_by = p.registered_by
+        registered_by_role = registered_by.role if registered_by else None
+
+        result.append({
+            "id": str(p.id),
+            "amount": float(p.amount),
+            "status": p.status,
+            "payment_method": p.payment_method,
+            "paid_at": p.paid_at.isoformat() if p.paid_at else None,
+            "customer_name": p.customer_account.name if p.customer_account else None,
+            "service_name": service_name,
+            "appointment_id": str(p.appointment_id),
+            "registered_by_name": registered_by.name if registered_by else None,
+            "registered_by_role": registered_by_role,
+        })
+
+    return result
 
 
 @router.get("/summary")
