@@ -63,6 +63,8 @@ def get_public_info(slug: str, db: Session = Depends(get_db)):
             "require_terms_acceptance": settings.require_terms_acceptance if settings else False,
             "homepage_title": settings.homepage_title if settings else None,
             "homepage_subtitle": settings.homepage_subtitle if settings else None,
+            "primary_button_text": settings.primary_button_text if settings else None,
+            "footer_text": settings.footer_text if settings else None,
             "confirmation_message": settings.confirmation_message if settings else None,
             "terms_text": settings.terms_text if settings else None,
             "cancellation_policy_text": settings.cancellation_policy_text if settings else None,
