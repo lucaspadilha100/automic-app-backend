@@ -61,6 +61,7 @@ class Appointment(Base, UUIDPrimaryKey, TimestampMixin):
     tenant_customer = relationship("TenantCustomer", back_populates="appointments")
     customer_account = relationship("CustomerAccount", back_populates="appointments")
     professional = relationship("Professional", back_populates="appointments")
+    unit = relationship("Unit", foreign_keys=[unit_id], lazy="select")
     appointment_services = relationship("AppointmentService", back_populates="appointment", cascade="all, delete-orphan")
     status_history = relationship("AppointmentStatusHistory", back_populates="appointment", cascade="all, delete-orphan")
     procedure_history = relationship("ProcedureHistory", back_populates="appointment", uselist=False)
