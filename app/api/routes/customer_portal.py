@@ -12,12 +12,15 @@ from app.models.appointment import Appointment
 from app.models.package import CustomerPackage
 from app.models.procedure import ProcedureHistory
 from app.models.tenant import TenantBookingPolicy
+from app.models.future import AppointmentReview
+from app.models.product import ProductOrder
 from app.services.appointment_service import appointment_service
 from app.schemas.auth import CustomerResponse
 from app.schemas.schemas import (
     CustomerProfileUpdate, CustomerPortalProfileResponse, AppointmentCancelRequest,
     AppointmentRescheduleRequest, CustomerPortalAppointmentResponse,
     CustomerPortalPackageResponse, CustomerPortalProcedureHistoryResponse,
+    ReviewCreate, ReviewResponse,
 )
 
 router = APIRouter(prefix="/customer", tags=["Portal do Cliente"])
@@ -150,3 +153,77 @@ def get_customer_package(slug: str, customer_package_id: uuid.UUID, db: Session 
 def list_customer_procedure_history(slug: str, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
     tenant = get_public_tenant_by_slug(slug, db)
     return db.query(ProcedureHistory).filter(ProcedureHistory.tenant_id == tenant.id, ProcedureHistory.customer_account_id == current_customer.id).order_by(ProcedureHistory.procedure_date.desc()).all()
+
+
+@router.get("/tenants/{slug}/appointments/{appointment_id}/review", response_model=ReviewResponse)
+def get_appointment_review(slug: str, appointment_id: uuid.UUID, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
+    tenant = get_public_tenant_by_slug(slug, db)
+    review = db.query(AppointmentReview).filter(
+        AppointmentReview.appointment_id == appointment_id,
+        AppointmentReview.tenant_id == tenant.id,
+        AppointmentReview.customer_account_id == current_customer.id,
+    ).first()
+    if not review:
+        raise NotFoundError("REVIEW_NOT_FOUND", "Avaliação não encontrada.")
+    return review
+
+
+@router.post("/tenants/{slug}/appointments/{appointment_id}/review", response_model=ReviewResponse)
+def create_appointment_review(slug: str, appointment_id: uuid.UUID, payload: ReviewCreate, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
+    tenant = get_public_tenant_by_slug(slug, db)
+    appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.tenant_id == tenant.id, Appointment.customer_account_id == current_customer.id).first()
+    if not appt:
+        raise NotFoundError("APPOINTMENT_NOT_FOUND", "Agendamento não encontrado.")
+    existing = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id, AppointmentReview.customer_account_id == current_customer.id).first()
+    if existing:
+        existing.rating = payload.rating
+        existing.comment = payload.comment
+        existing.visibility = payload.visibility
+        db.commit()
+        db.refresh(existing)
+        return existing
+    review = AppointmentReview(
+        tenant_id=tenant.id,
+        appointment_id=appointment_id,
+        customer_account_id=current_customer.id,
+        rating=payload.rating,
+        comment=payload.comment,
+        visibility=payload.visibility,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+    return review
+
+
+@router.post("/tenants/{slug}/product-orders")
+def customer_create_product_order(slug: str, payload: dict, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
+    from app.models.product import Product
+    from decimal import Decimal
+    tenant = get_public_tenant_by_slug(slug, db)
+    items_data = []
+    total = Decimal("0")
+    for item in payload.get("items", []):
+        product = db.query(Product).filter(Product.id == item["product_id"], Product.tenant_id == tenant.id, Product.is_active == True).first()
+        if not product:
+            raise NotFoundError("PRODUCT_NOT_FOUND", f"Produto não encontrado.")
+        qty = int(item.get("quantity", 1))
+        item_total = product.price * qty
+        total += item_total
+        items_data.append({"product_id": str(product.id), "product_name": product.name, "quantity": qty, "unit_price": float(product.price)})
+        if product.track_stock and product.stock_quantity is not None:
+            product.stock_quantity -= qty
+    order = ProductOrder(
+        tenant_id=tenant.id,
+        customer_account_id=current_customer.id,
+        customer_name=payload.get("customer_name", current_customer.name),
+        customer_phone=payload.get("customer_phone"),
+        items=items_data,
+        total=total,
+        notes=payload.get("notes"),
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return {"id": str(order.id), "total": float(order.total), "status": order.status, "items": order.items}
