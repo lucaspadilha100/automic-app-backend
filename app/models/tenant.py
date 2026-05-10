@@ -181,6 +181,9 @@ class TenantSettings(Base, UUIDPrimaryKey, TimestampMixin):
     no_show_policy_text = Column(Text)
     cancellation_policy_text = Column(Text)
 
+    # Per-section page customization (JSONB)
+    page_sections = Column(JSONB, nullable=True)
+
     tenant = relationship("Tenant", back_populates="settings")
 
 

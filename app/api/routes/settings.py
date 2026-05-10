@@ -13,9 +13,10 @@ from app.services.effective_plan_service import (
     effective_plan_service, PLAN_FEATURE_MAP, LIMIT_KEYS,
 )
 from app.services.audit_service import audit_service
-from app.schemas.tenant import TenantSettingsUpdate, TenantThemeUpdate, BookingPolicyUpdate
+from app.schemas.tenant import TenantSettingsUpdate, TenantThemeUpdate, BookingPolicyUpdate, PageSectionsUpdate
 from app.schemas.schemas import NotificationTemplateCreate, WebhookCreate, WebhookResponse, TenantPaymentSettingsUpdate, TenantPaymentSettingsResponse
-from typing import List
+from sqlalchemy.orm.attributes import flag_modified
+from typing import List, Dict, Any
 
 router = APIRouter(prefix="/settings", tags=["Configurações do Tenant"])
 
@@ -329,3 +330,107 @@ def delete_webhook(
     db.delete(ep)
     db.commit()
     return {"message": "Webhook removido."}
+
+
+# ── Page Sections ────────────────────────────────────────────────────────────
+
+DEFAULT_PAGE_SECTIONS: Dict[str, Dict[str, Any]] = {
+    "hero": {
+        "visible": True,
+        "background_image_url": None,
+        "background_color": None,
+        "overlay_opacity": 0.7,
+    },
+    "about": {
+        "visible": True,
+        "label": "Sobre nós",
+        "title": None,
+        "subtitle": None,
+        "background_color": "#f4f4f5",
+        "cta_text": None,
+    },
+    "services": {
+        "visible": True,
+        "label": "O que oferecemos",
+        "title": "Nossos serviços",
+        "background_color": "#ffffff",
+    },
+    "team": {
+        "visible": True,
+        "label": "Conheça",
+        "title": "Nossa equipe",
+        "subtitle": "Toque em um profissional para ver os serviços",
+        "background_color": "#09090b",
+    },
+    "products": {
+        "visible": True,
+        "label": "Loja",
+        "title": "Produtos",
+        "background_color": "#f4f4f5",
+    },
+    "portfolio": {
+        "visible": True,
+        "label": "Nosso trabalho",
+        "title": "Portfólio",
+        "background_color": "#ffffff",
+    },
+    "reviews": {
+        "visible": True,
+        "label": "Depoimentos",
+        "title": "O que dizem",
+        "background_color": "#f4f4f5",
+    },
+    "footer": {
+        "visible": True,
+        "background_color": "#09090b",
+    },
+}
+
+
+def _merge_page_sections(stored: dict) -> dict:
+    result = {}
+    for key, defaults in DEFAULT_PAGE_SECTIONS.items():
+        result[key] = {**defaults, **(stored.get(key) or {})}
+    return result
+
+
+@router.get("/page-sections")
+def get_page_sections(
+    tenant: Tenant = Depends(require_active_tenant),
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db),
+):
+    settings = db.query(TenantSettings).filter(TenantSettings.tenant_id == tenant.id).first()
+    stored = (settings.page_sections or {}) if settings else {}
+    return _merge_page_sections(stored)
+
+
+@router.put("/page-sections")
+def update_page_sections(
+    payload: PageSectionsUpdate,
+    tenant: Tenant = Depends(require_active_tenant),
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db),
+):
+    from app.core.exceptions import ForbiddenError
+    if not feature_flag_service.is_enabled(db, tenant, "page_customization"):
+        raise ForbiddenError("Personalização de seções não está disponível no seu plano. Contate o suporte.")
+
+    settings = db.query(TenantSettings).filter(TenantSettings.tenant_id == tenant.id).first()
+    if not settings:
+        settings = TenantSettings(tenant_id=tenant.id)
+        db.add(settings)
+        db.flush()
+
+    stored = dict(settings.page_sections or {})
+    updates = payload.model_dump(exclude_none=True)
+    for section_key, section_data in updates.items():
+        if section_key in DEFAULT_PAGE_SECTIONS and isinstance(section_data, dict):
+            current = dict(stored.get(section_key) or {})
+            current.update({k: v for k, v in section_data.items() if v is not None})
+            stored[section_key] = current
+
+    settings.page_sections = stored
+    flag_modified(settings, "page_sections")
+    db.commit()
+    return _merge_page_sections(stored)

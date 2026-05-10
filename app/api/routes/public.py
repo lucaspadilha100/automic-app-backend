@@ -7,6 +7,7 @@ from db.session import get_db
 from app.core.dependencies import get_public_tenant_by_slug, get_optional_customer
 from app.core.exceptions import CustomerNotFoundError, ForbiddenError, InvalidBookingPolicyError
 from app.models.tenant import Tenant, TenantSettings, TenantTheme, TenantBookingPolicy
+from app.api.routes.settings import DEFAULT_PAGE_SECTIONS, _merge_page_sections
 from app.models.customer import CustomerAccount, TenantCustomer
 from app.models.appointment import Appointment
 from app.models.service import Service, ServiceCategory
@@ -81,6 +82,7 @@ def get_public_info(slug: str, db: Session = Depends(get_db)):
             }
             for bh in hours
         ],
+        "page_sections": _merge_page_sections(settings.page_sections or {} if settings else {}),
     }
 
 

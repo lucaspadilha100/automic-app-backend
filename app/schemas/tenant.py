@@ -183,6 +183,28 @@ class TenantThemeUpdate(BaseModel):
     theme_preset: Optional[str] = None
 
 
+class PageSectionItem(BaseModel):
+    visible: Optional[bool] = None
+    label: Optional[str] = None
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    background_color: Optional[str] = None
+    background_image_url: Optional[str] = None
+    overlay_opacity: Optional[float] = None
+    cta_text: Optional[str] = None
+
+
+class PageSectionsUpdate(BaseModel):
+    hero: Optional[PageSectionItem] = None
+    about: Optional[PageSectionItem] = None
+    services: Optional[PageSectionItem] = None
+    team: Optional[PageSectionItem] = None
+    products: Optional[PageSectionItem] = None
+    portfolio: Optional[PageSectionItem] = None
+    reviews: Optional[PageSectionItem] = None
+    footer: Optional[PageSectionItem] = None
+
+
 class BookingPolicyUpdate(BaseModel):
     min_minutes_before_booking: Optional[int] = None
     max_days_ahead_booking: Optional[int] = None
