@@ -24,7 +24,8 @@ from app.services.audit_service import audit_service
 from app.services.owner_notification_service import owner_notification_service
 from app.services.unit_service import unit_service
 from app.services.effective_plan_service import effective_plan_service, LIMIT_KEYS
-from datetime import datetime, timezone
+from app.models.schedule import BusinessHour
+from datetime import datetime, timezone, time as dt_time
 
 router = APIRouter(prefix="/master", tags=["Console Master AUTOMIC"])
 
@@ -52,6 +53,17 @@ def create_tenant(
 
     # Every tenant must start with a main unit, even when multi-unit is disabled.
     unit_service.ensure_main_unit(db, tenant, flush=False)
+
+    # Default business hours: Mon–Fri 08:00–18:00, Sat–Sun closed.
+    for weekday in range(7):
+        is_weekend = weekday >= 5
+        db.add(BusinessHour(
+            tenant_id=tenant.id,
+            weekday=weekday,
+            is_closed=is_weekend,
+            open_time=None if is_weekend else dt_time(8, 0),
+            close_time=None if is_weekend else dt_time(18, 0),
+        ))
 
     # Default subscription when a seed/default plan exists. It can be changed later
     # through /master/tenants/{tenant_id}/subscription.
