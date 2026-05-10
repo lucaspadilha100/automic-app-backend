@@ -35,9 +35,25 @@ class UserResponse(BaseModel):
     email: str
     role: str
     tenant_id: Optional[uuid.UUID] = None
+    tenant_slug: Optional[str] = None
+    tenant_name: Optional[str] = None
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_user(cls, user: object) -> "UserResponse":
+        tenant = getattr(user, "tenant", None)
+        return cls(
+            id=getattr(user, "id"),
+            name=getattr(user, "name"),
+            email=getattr(user, "email"),
+            role=getattr(user, "role"),
+            tenant_id=getattr(user, "tenant_id", None),
+            tenant_slug=getattr(tenant, "slug", None) if tenant else None,
+            tenant_name=getattr(tenant, "name", None) if tenant else None,
+            is_active=getattr(user, "is_active"),
+        )
 
 
 # Customer auth
