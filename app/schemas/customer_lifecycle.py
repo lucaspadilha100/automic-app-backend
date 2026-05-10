@@ -72,6 +72,10 @@ class CustomerLifecycleCustomerListItem(BaseModel):
     tenant_customer_id: uuid.UUID
     customer_account_id: Optional[uuid.UUID]
     lifecycle_status: str
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    customer_since: Optional[datetime] = None
     last_appointment_at: Optional[datetime]
     next_appointment_at: Optional[datetime]
     total_spent: Decimal
