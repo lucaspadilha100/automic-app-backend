@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.customer import TenantCustomer
 from app.models.customer_lifecycle import TenantLifecycleSetting
@@ -219,7 +219,7 @@ class CustomerLifecycleService:
         no_show_count_min: Optional[int] = None,
     ) -> List[TenantCustomer]:
         feature_flag_service.require_feature(db, tenant, FEATURE_KEY)
-        q = db.query(TenantCustomer).filter(TenantCustomer.tenant_id == tenant.id)
+        q = db.query(TenantCustomer).options(joinedload(TenantCustomer.customer_account)).filter(TenantCustomer.tenant_id == tenant.id)
         if lifecycle_status:
             q = q.filter(TenantCustomer.lifecycle_status == lifecycle_status)
         if min_total_spent is not None:
