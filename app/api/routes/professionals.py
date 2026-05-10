@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import uuid
 from datetime import datetime, timezone
@@ -7,13 +7,17 @@ from datetime import datetime, timezone
 from db.session import get_db
 from app.core.dependencies import (
     get_current_user, require_active_tenant, require_manager_or_above,
+    require_tenant_owner_or_above,
 )
 from app.core.exceptions import NotFoundError, ProfessionalNotFoundError
+from app.core.security import hash_password
+from pydantic import BaseModel
 from app.models.user import User
 from app.models.tenant import Tenant
 from app.models.professional import Professional, ProfessionalAvailability
 from app.models.service import ProfessionalService, Service
 from app.models.schedule import BusinessHour, BlockedTime
+from app.models.appointment import Appointment
 from app.services.plan_limit_service import plan_limit_service
 from app.services.audit_service import audit_service
 from app.schemas.schemas import (
@@ -26,7 +30,38 @@ from app.schemas.schemas import (
 router = APIRouter(prefix="/professionals", tags=["Profissionais"])
 
 
-@router.post("", response_model=ProfessionalResponse)
+# ---- Professional self appointments (must be before /{professional_id} wildcard) ----
+
+def _serialize_appt(a):
+    return {
+        "id": str(a.id),
+        "start_datetime": a.start_datetime.isoformat(),
+        "end_datetime": a.end_datetime.isoformat() if a.end_datetime else None,
+        "status": a.status,
+        "customer_notes": a.customer_notes,
+        "services": [s.service_name_snapshot for s in (a.appointment_services or [])],
+        "customer_name": a.customer_account.name if a.customer_account else None,
+        "customer_phone": a.customer_account.phone if a.customer_account else None,
+    }
+
+
+@router.get("/me/appointments")
+def get_my_appointments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "professional":
+        raise HTTPException(status_code=403, detail="Apenas profissionais podem acessar este recurso.")
+    prof = db.query(Professional).filter(Professional.user_id == current_user.id).first()
+    if not prof:
+        raise HTTPException(status_code=404, detail="Profissional não encontrado para este usuário.")
+    appointments = db.query(Appointment).filter(
+        Appointment.professional_id == prof.id,
+    ).order_by(Appointment.start_datetime.desc()).limit(100).all()
+    return [_serialize_appt(a) for a in appointments]
+
+
+
 def create_professional(
     payload: ProfessionalCreate,
     tenant: Tenant = Depends(require_active_tenant),
@@ -235,4 +270,62 @@ def get_availability(
         ProfessionalAvailability.tenant_id == tenant.id,
     ).order_by(ProfessionalAvailability.weekday).all()
     return rows
+
+
+# ---- Enable login ----
+
+class EnableLoginRequest(BaseModel):
+    login_email: str
+    password: str
+
+
+@router.post("/{professional_id}/enable-login")
+def enable_professional_login(
+    professional_id: uuid.UUID,
+    payload: EnableLoginRequest,
+    current_user: User = Depends(require_tenant_owner_or_above),
+    db: Session = Depends(get_db),
+):
+    prof = db.query(Professional).filter(
+        Professional.id == professional_id,
+        Professional.tenant_id == current_user.tenant_id,
+        Professional.deleted_at.is_(None),
+    ).first()
+    if not prof:
+        raise ProfessionalNotFoundError()
+
+    # Check if another professional in the same tenant already uses this email
+    conflict = db.query(Professional).join(
+        User, Professional.user_id == User.id
+    ).filter(
+        Professional.tenant_id == current_user.tenant_id,
+        User.email == payload.login_email,
+        Professional.id != professional_id,
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail="Email already in use by another professional in this tenant.")
+
+    if prof.user_id is not None:
+        # Update existing user
+        existing_user = db.query(User).filter(User.id == prof.user_id).first()
+        if existing_user:
+            existing_user.email = payload.login_email
+            existing_user.password_hash = hash_password(payload.password)
+            db.commit()
+        return {"updated": True}
+    else:
+        # Create new user
+        new_user = User(
+            role="professional",
+            tenant_id=prof.tenant_id,
+            email=payload.login_email,
+            password_hash=hash_password(payload.password),
+            name=prof.name,
+            is_active=True,
+        )
+        db.add(new_user)
+        db.flush()
+        prof.user_id = new_user.id
+        db.commit()
+        return {"created": True, "user_id": str(new_user.id)}
 
