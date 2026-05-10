@@ -61,7 +61,7 @@ def get_my_appointments(
     return [_serialize_appt(a) for a in appointments]
 
 
-
+@router.post("", response_model=ProfessionalResponse)
 def create_professional(
     payload: ProfessionalCreate,
     tenant: Tenant = Depends(require_active_tenant),
