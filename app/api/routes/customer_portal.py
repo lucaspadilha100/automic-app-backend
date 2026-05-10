@@ -37,7 +37,7 @@ class ProductOrderItemCreate(BaseModel):
 
 class ProductOrderCreate(BaseModel):
     items: List[ProductOrderItemCreate]
-    delivery_type: str = "pickup"  # pickup | delivery
+    delivery_type: str = "pickup"
     notes: Optional[str] = None
 
 router = APIRouter(prefix="/customer", tags=["Portal do Cliente"])
@@ -235,20 +235,24 @@ def create_product_order(
     db: Session = Depends(get_db),
     current_customer: CustomerAccount = Depends(get_current_customer),
 ):
-    """Reserva de produto pelo cliente — retirada ou entrega a combinar."""
     tenant = get_public_tenant_by_slug(slug, db)
+
+    requested_ids = [item.product_id for item in payload.items]
+    products_map = {
+        p.id: p for p in db.query(Product).filter(
+            Product.id.in_(requested_ids),
+            Product.tenant_id == tenant.id,
+            Product.is_active == True,
+            Product.deleted_at.is_(None),
+        ).all()
+    }
 
     total = Decimal("0")
     items_data = []
     for item in payload.items:
-        product = db.query(Product).filter(
-            Product.id == item.product_id,
-            Product.tenant_id == tenant.id,
-            Product.is_active == True,
-            Product.deleted_at.is_(None),
-        ).first()
+        product = products_map.get(item.product_id)
         if not product:
-            raise HTTPException(404, f"Produto não encontrado.")
+            raise HTTPException(404, "Produto não encontrado.")
         subtotal = product.price * item.quantity
         total += subtotal
         items_data.append((product, item.quantity, subtotal))
