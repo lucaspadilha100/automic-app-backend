@@ -66,6 +66,7 @@ class Appointment(Base, UUIDPrimaryKey, TimestampMixin):
     procedure_history = relationship("ProcedureHistory", back_populates="appointment", uselist=False)
     payments = relationship("Payment", back_populates="appointment")
     customer_package = relationship("CustomerPackage", back_populates="appointments", foreign_keys=[customer_package_id])
+    supply_usages = relationship("AppointmentSupplyUsage", back_populates="appointment", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("end_datetime > start_datetime", name="ck_appointments_datetime_order"),

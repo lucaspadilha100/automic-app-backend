@@ -60,6 +60,10 @@ class Tenant(Base, UUIDPrimaryKey, TimestampMixin):
     audit_logs = relationship("AuditLog", back_populates="tenant")
     terms = relationship("TenantTerm", back_populates="tenant", cascade="all, delete-orphan")
     webhook_endpoints = relationship("WebhookEndpoint", back_populates="tenant", cascade="all, delete-orphan")
+    product_categories = relationship("ProductCategory", back_populates="tenant", cascade="all, delete-orphan")
+    products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
+    product_orders = relationship("ProductOrder", back_populates="tenant", cascade="all, delete-orphan")
+    supplies = relationship("Supply", back_populates="tenant", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("status IN ('trial','active','suspended','cancelled','inactive')", name="ck_tenants_status"),

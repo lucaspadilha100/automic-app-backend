@@ -76,6 +76,13 @@ from app.api.routes.schedule_exceptions import (
     router as schedule_exceptions_router,
     bulk_router as appointments_bulk_router,
 )
+from app.api.routes.products import (
+    router as products_router,
+    public_router as products_public_router,
+    categories_router as product_categories_router,
+    orders_router as product_orders_router,
+)
+from app.api.routes.supplies import router as supplies_router, usage_router as supply_usage_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -165,6 +172,12 @@ app.include_router(master_tasks_router, prefix=API_V1)
 app.include_router(master_billing_manual_router, prefix=API_V1)
 app.include_router(schedule_exceptions_router, prefix=API_V1)
 app.include_router(appointments_bulk_router, prefix=API_V1)
+app.include_router(product_categories_router, prefix=API_V1)
+app.include_router(products_router, prefix=API_V1)
+app.include_router(product_orders_router, prefix=API_V1)
+app.include_router(products_public_router, prefix=API_V1)
+app.include_router(supplies_router, prefix=API_V1)
+app.include_router(supply_usage_router, prefix=API_V1)
 
 
 @app.get("/health", tags=["Health"])
