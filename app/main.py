@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -66,6 +67,16 @@ from app.api.routes.master_support import router as master_support_router
 from app.api.routes.master_notifications import router as master_notifications_router
 from app.api.routes.public_signup import router as public_signup_router
 from app.api.routes.master_ops import router as master_ops_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run migrations on startup as safety net
+    import subprocess, sys
+    try:
+        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True)
+    except Exception:
+        pass  # Don't block startup if alembic fails
+    yield
 from app.api.routes.master_invoices import (
     router as master_invoices_router,
     jobs_router as master_invoice_jobs_router,
@@ -85,6 +96,7 @@ from app.api.routes.products import (
 from app.api.routes.supplies import router as supplies_router, usage_router as supply_usage_router
 
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     version="1.0.0",
     description=(

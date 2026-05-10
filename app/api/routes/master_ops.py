@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session
 from db.session import get_db
 from app.core.dependencies import require_super_admin
 from app.models.user import User
+from app.models.tenant import Tenant
+from app.models.product import Product
+from app.models.supply import Supply
 from app.models.task_run import TaskRunSource
 from app.services.tenant_ops_service import tenant_ops_service
 from app.services.task_run_service import task_run_service
@@ -57,3 +60,67 @@ def run_24h_reminders(
         result = reminder_service.send_24h_reminders(db)
         ctx.set_summary(result)
         return result
+
+
+@router.post("/jobs/check-low-stock")
+def check_low_stock(
+    current_user: User = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Verifica produtos e insumos com estoque abaixo do limite configurado em todos os tenants ativos.
+    Retorna um resumo com os itens em baixo estoque por tenant.
+    """
+    active_tenants = (
+        db.query(Tenant)
+        .filter(Tenant.status == "active", Tenant.deleted_at.is_(None))
+        .all()
+    )
+
+    low_stock_products: List[Dict[str, Any]] = []
+    low_stock_supplies: List[Dict[str, Any]] = []
+
+    for tenant in active_tenants:
+        products = (
+            db.query(Product)
+            .filter(
+                Product.tenant_id == tenant.id,
+                Product.track_stock.is_(True),
+                Product.stock_quantity <= Product.low_stock_threshold,
+                Product.is_active.is_(True),
+                Product.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for p in products:
+            low_stock_products.append({
+                "tenant_name": tenant.name,
+                "product_name": p.name,
+                "stock_quantity": p.stock_quantity,
+                "low_stock_threshold": p.low_stock_threshold,
+            })
+
+        supplies = (
+            db.query(Supply)
+            .filter(
+                Supply.tenant_id == tenant.id,
+                Supply.track_stock.is_(True),
+                Supply.stock_quantity <= Supply.low_stock_threshold,
+                Supply.is_active.is_(True),
+                Supply.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for s in supplies:
+            low_stock_supplies.append({
+                "tenant_name": tenant.name,
+                "supply_name": s.name,
+                "stock_quantity": float(s.stock_quantity),
+                "low_stock_threshold": float(s.low_stock_threshold),
+            })
+
+    return {
+        "tenants_checked": len(active_tenants),
+        "low_stock_products": low_stock_products,
+        "low_stock_supplies": low_stock_supplies,
+    }
