@@ -1,5 +1,6 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from app.models.future import AppointmentReview
 from app.models.package import CustomerPackage
 from app.models.procedure import ProcedureHistory
 from app.models.tenant import TenantBookingPolicy
+from app.models.product import Product, ProductOrder, ProductOrderItem
 from app.services.appointment_service import appointment_service
 from app.schemas.auth import CustomerResponse
 from app.schemas.schemas import (
@@ -26,6 +28,17 @@ from app.schemas.schemas import (
 class ReviewCreateRequest(BaseModel):
     rating: int = Field(..., ge=1, le=5)
     comment: Optional[str] = None
+
+
+class ProductOrderItemCreate(BaseModel):
+    product_id: uuid.UUID
+    quantity: int = Field(1, ge=1, le=99)
+
+
+class ProductOrderCreate(BaseModel):
+    items: List[ProductOrderItemCreate]
+    delivery_type: str = "pickup"  # pickup | delivery
+    notes: Optional[str] = None
 
 router = APIRouter(prefix="/customer", tags=["Portal do Cliente"])
 
@@ -213,3 +226,62 @@ def get_appointment_review(
     if not review:
         return None
     return {"id": str(review.id), "rating": review.rating, "comment": review.comment}
+
+
+@router.post("/tenants/{slug}/product-orders", status_code=201)
+def create_product_order(
+    slug: str,
+    payload: ProductOrderCreate,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
+    """Reserva de produto pelo cliente — retirada ou entrega a combinar."""
+    tenant = get_public_tenant_by_slug(slug, db)
+
+    total = Decimal("0")
+    items_data = []
+    for item in payload.items:
+        product = db.query(Product).filter(
+            Product.id == item.product_id,
+            Product.tenant_id == tenant.id,
+            Product.is_active == True,
+            Product.deleted_at.is_(None),
+        ).first()
+        if not product:
+            raise HTTPException(404, f"Produto não encontrado.")
+        subtotal = product.price * item.quantity
+        total += subtotal
+        items_data.append((product, item.quantity, subtotal))
+
+    delivery_label = "Retirada na loja" if payload.delivery_type == "pickup" else "Entrega (a combinar)"
+    notes_parts = [f"Entrega: {delivery_label}"]
+    if payload.notes:
+        notes_parts.append(f"Observação: {payload.notes}")
+
+    order = ProductOrder(
+        tenant_id=tenant.id,
+        customer_account_id=current_customer.id,
+        customer_name=current_customer.name,
+        customer_phone=current_customer.phone,
+        status="pending",
+        payment_status="pending",
+        payment_method=payload.delivery_type,
+        total=total,
+        notes="\n".join(notes_parts),
+    )
+    db.add(order)
+    db.flush()
+
+    for product, quantity, subtotal in items_data:
+        db.add(ProductOrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            product_name_snapshot=product.name,
+            unit_price=product.price,
+            quantity=quantity,
+            subtotal=subtotal,
+        ))
+
+    db.commit()
+    db.refresh(order)
+    return {"id": str(order.id), "status": order.status, "total": float(order.total)}
