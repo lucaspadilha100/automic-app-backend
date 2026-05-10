@@ -40,6 +40,7 @@ PLAN_FEATURE_MAP: Dict[str, str] = {
     "automation_rules": "allow_automation_rules",
     "whatsapp_integration": "allow_whatsapp_integration",
     "commissions": "allow_commissions",
+    "page_customization": "allow_page_customization",
 }
 
 LIMIT_KEYS = (
