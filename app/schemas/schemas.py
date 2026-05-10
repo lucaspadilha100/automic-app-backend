@@ -177,9 +177,24 @@ class AppointmentServiceSnapshot(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AppointmentProfessionalSnapshot(BaseModel):
+    id: uuid.UUID
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AppointmentCustomerSnapshot(BaseModel):
+    id: uuid.UUID
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AppointmentResponse(BaseModel):
     id: uuid.UUID
     professional_id: uuid.UUID
+    professional: Optional[AppointmentProfessionalSnapshot] = None
+    customer_account_id: Optional[uuid.UUID] = None
+    customer_account: Optional[AppointmentCustomerSnapshot] = None
     start_datetime: datetime
     end_datetime: datetime
     total_duration_minutes: int
