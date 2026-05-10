@@ -1,34 +1,41 @@
 from typing import List, Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict
+from datetime import datetime, timezone
 import uuid
 
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
 from db.session import get_db
-from app.core.dependencies import require_active_tenant, require_manager_or_above
-from app.core.exceptions import NotFoundError
+from app.core.dependencies import (
+    get_current_user, require_active_tenant, require_manager_or_above,
+    require_receptionist_or_above, require_feature,
+)
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.user import User
 from app.models.tenant import Tenant
 from app.models.supply import Supply, AppointmentSupplyUsage
 from app.models.appointment import Appointment
-
-router = APIRouter(tags=["Insumos"])
+from app.services.audit_service import audit_service
 
 
 # ---- Schemas ----
 
 class SupplyCreate(BaseModel):
     name: str
+    description: Optional[str] = None
     unit: str = "un"
-    cost_price: Optional[Decimal] = None
+    cost_price: Decimal = Decimal("0")
     track_stock: bool = False
-    stock_quantity: Optional[Decimal] = None
-    low_stock_threshold: Optional[Decimal] = None
+    stock_quantity: Decimal = Decimal("0")
+    low_stock_threshold: Decimal = Decimal("5")
     is_active: bool = True
+
 
 class SupplyUpdate(BaseModel):
     name: Optional[str] = None
+    description: Optional[str] = None
     unit: Optional[str] = None
     cost_price: Optional[Decimal] = None
     track_stock: Optional[bool] = None
@@ -36,78 +43,114 @@ class SupplyUpdate(BaseModel):
     low_stock_threshold: Optional[Decimal] = None
     is_active: Optional[bool] = None
 
+
 class SupplyResponse(BaseModel):
     id: uuid.UUID
+    tenant_id: uuid.UUID
     name: str
+    description: Optional[str]
     unit: str
-    cost_price: Optional[Decimal]
+    cost_price: Decimal
     track_stock: bool
-    stock_quantity: Optional[Decimal]
-    low_stock_threshold: Optional[Decimal]
+    stock_quantity: Decimal
+    low_stock_threshold: Decimal
     is_active: bool
-    model_config = ConfigDict(from_attributes=True)
+    created_at: datetime
+    updated_at: datetime
 
-class StockAdjust(BaseModel):
+    class Config:
+        from_attributes = True
+
+
+class StockAdjustPayload(BaseModel):
     adjustment: Decimal
-    reason: Optional[str] = None
+    reason: str
+
 
 class SupplyUsageCreate(BaseModel):
     supply_id: uuid.UUID
     quantity_used: Decimal
     notes: Optional[str] = None
 
+
 class SupplyUsageResponse(BaseModel):
     id: uuid.UUID
+    appointment_id: uuid.UUID
     supply_id: uuid.UUID
+    tenant_id: uuid.UUID
     quantity_used: Decimal
     notes: Optional[str]
-    supply: Optional[SupplyResponse]
-    model_config = ConfigDict(from_attributes=True)
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
-# ---- Supply routes ----
+# ---- Routers ----
 
-@router.get("/supplies", response_model=List[SupplyResponse])
+router = APIRouter(
+    prefix="/supplies",
+    tags=["Product Usage"],
+    dependencies=[Depends(require_feature("product_usage"))],
+)
+
+usage_router = APIRouter(
+    prefix="/appointments",
+    tags=["Product Usage"],
+    dependencies=[Depends(require_feature("product_usage"))],
+)
+
+
+# ---- Supplies ----
+
+@router.get("", response_model=List[SupplyResponse])
 def list_supplies(
-    is_active: Optional[bool] = None,
+    active_only: bool = True,
+    skip: int = 0,
+    limit: int = 100,
     tenant: Tenant = Depends(require_active_tenant),
-    current_user: User = Depends(require_manager_or_above),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    q = db.query(Supply).filter(Supply.tenant_id == tenant.id)
-    if is_active is not None:
-        q = q.filter(Supply.is_active == is_active)
-    return q.order_by(Supply.name).all()
+    q = db.query(Supply).filter(Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None))
+    if active_only:
+        q = q.filter(Supply.is_active == True)
+    return q.offset(skip).limit(limit).all()
 
 
-@router.get("/supplies/{supply_id}", response_model=SupplyResponse)
-def get_supply(
-    supply_id: uuid.UUID,
-    tenant: Tenant = Depends(require_active_tenant),
-    current_user: User = Depends(require_manager_or_above),
-    db: Session = Depends(get_db),
-):
-    s = db.query(Supply).filter(Supply.id == supply_id, Supply.tenant_id == tenant.id).first()
-    if not s:
-        raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
-    return s
-
-
-@router.post("/supplies", response_model=SupplyResponse)
+@router.post("", response_model=SupplyResponse, status_code=201)
 def create_supply(
     payload: SupplyCreate,
     tenant: Tenant = Depends(require_active_tenant),
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ):
-    s = Supply(tenant_id=tenant.id, **payload.model_dump())
-    db.add(s)
+    supply = Supply(tenant_id=tenant.id, **payload.model_dump())
+    db.add(supply)
+    db.flush()
+    audit_service.log(db, "supply_created", "supply", supply.id, tenant.id, current_user.id)
     db.commit()
-    db.refresh(s)
-    return s
+    db.refresh(supply)
+    return supply
 
 
-@router.put("/supplies/{supply_id}", response_model=SupplyResponse)
+@router.get("/{supply_id}", response_model=SupplyResponse)
+def get_supply(
+    supply_id: uuid.UUID,
+    tenant: Tenant = Depends(require_active_tenant),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supply = db.query(Supply).filter(
+        Supply.id == supply_id, Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None)
+    ).first()
+    if not supply:
+        raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
+    return supply
+
+
+@router.put("/{supply_id}", response_model=SupplyResponse)
 def update_supply(
     supply_id: uuid.UUID,
     payload: SupplyUpdate,
@@ -115,98 +158,126 @@ def update_supply(
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ):
-    s = db.query(Supply).filter(Supply.id == supply_id, Supply.tenant_id == tenant.id).first()
-    if not s:
+    supply = db.query(Supply).filter(
+        Supply.id == supply_id, Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None)
+    ).first()
+    if not supply:
         raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(s, k, v)
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(supply, k, v)
+    audit_service.log(db, "supply_updated", "supply", supply.id, tenant.id, current_user.id)
     db.commit()
-    db.refresh(s)
-    return s
+    db.refresh(supply)
+    return supply
 
 
-@router.delete("/supplies/{supply_id}")
+@router.delete("/{supply_id}")
 def delete_supply(
     supply_id: uuid.UUID,
     tenant: Tenant = Depends(require_active_tenant),
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ):
-    s = db.query(Supply).filter(Supply.id == supply_id, Supply.tenant_id == tenant.id).first()
-    if not s:
+    supply = db.query(Supply).filter(
+        Supply.id == supply_id, Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None)
+    ).first()
+    if not supply:
         raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
-    s.is_active = False
+    supply.deleted_at = datetime.now(timezone.utc)
+    supply.is_active = False
+    audit_service.log(db, "supply_deleted", "supply", supply.id, tenant.id, current_user.id)
     db.commit()
-    return {"message": "Insumo desativado."}
+    return {"message": "Insumo removido."}
 
 
-@router.post("/supplies/{supply_id}/adjust-stock", response_model=SupplyResponse)
+@router.post("/{supply_id}/adjust-stock", response_model=SupplyResponse)
 def adjust_stock(
     supply_id: uuid.UUID,
-    payload: StockAdjust,
+    payload: StockAdjustPayload,
     tenant: Tenant = Depends(require_active_tenant),
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ):
-    s = db.query(Supply).filter(Supply.id == supply_id, Supply.tenant_id == tenant.id).first()
-    if not s:
+    supply = db.query(Supply).filter(
+        Supply.id == supply_id, Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None)
+    ).first()
+    if not supply:
         raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
-    s.stock_quantity = (s.stock_quantity or Decimal("0")) + payload.adjustment
+    new_qty = Decimal(str(supply.stock_quantity)) + payload.adjustment
+    if new_qty < 0:
+        raise ValidationError("Estoque insuficiente para este ajuste.")
+    supply.stock_quantity = new_qty
+    audit_service.log(db, "supply_stock_adjusted", "supply", supply.id, tenant.id, current_user.id)
     db.commit()
-    db.refresh(s)
-    return s
+    db.refresh(supply)
+    return supply
 
 
-# ---- Appointment supply usage ----
+# ---- Supply Usage ----
 
-@router.get("/appointments/{appointment_id}/supply-usage", response_model=List[SupplyUsageResponse])
-def get_appointment_supply_usage(
+@usage_router.get("/{appointment_id}/supply-usage", response_model=List[SupplyUsageResponse])
+def list_supply_usage(
     appointment_id: uuid.UUID,
     tenant: Tenant = Depends(require_active_tenant),
-    current_user: User = Depends(require_manager_or_above),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.tenant_id == tenant.id).first()
-    if not appt:
+    appointment = db.query(Appointment).filter(
+        Appointment.id == appointment_id, Appointment.tenant_id == tenant.id
+    ).first()
+    if not appointment:
         raise NotFoundError("APPOINTMENT_NOT_FOUND", "Agendamento não encontrado.")
-    return db.query(AppointmentSupplyUsage).filter(AppointmentSupplyUsage.appointment_id == appointment_id).all()
+    return (
+        db.query(AppointmentSupplyUsage)
+        .filter(AppointmentSupplyUsage.appointment_id == appointment_id)
+        .all()
+    )
 
 
-@router.post("/appointments/{appointment_id}/supply-usage", response_model=SupplyUsageResponse)
+@usage_router.post("/{appointment_id}/supply-usage", response_model=SupplyUsageResponse, status_code=201)
 def add_supply_usage(
     appointment_id: uuid.UUID,
     payload: SupplyUsageCreate,
     tenant: Tenant = Depends(require_active_tenant),
-    current_user: User = Depends(require_manager_or_above),
+    current_user: User = Depends(require_receptionist_or_above),
     db: Session = Depends(get_db),
 ):
-    appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.tenant_id == tenant.id).first()
-    if not appt:
+    appointment = db.query(Appointment).filter(
+        Appointment.id == appointment_id, Appointment.tenant_id == tenant.id
+    ).first()
+    if not appointment:
         raise NotFoundError("APPOINTMENT_NOT_FOUND", "Agendamento não encontrado.")
-    supply = db.query(Supply).filter(Supply.id == payload.supply_id, Supply.tenant_id == tenant.id).first()
+    supply = db.query(Supply).filter(
+        Supply.id == payload.supply_id, Supply.tenant_id == tenant.id, Supply.deleted_at.is_(None)
+    ).first()
     if not supply:
         raise NotFoundError("SUPPLY_NOT_FOUND", "Insumo não encontrado.")
+    if supply.track_stock:
+        remaining = Decimal(str(supply.stock_quantity)) - payload.quantity_used
+        if remaining < 0:
+            raise ValidationError(f"Estoque insuficiente para o insumo '{supply.name}'.")
+        supply.stock_quantity = remaining
     usage = AppointmentSupplyUsage(
-        tenant_id=tenant.id,
         appointment_id=appointment_id,
         supply_id=payload.supply_id,
+        tenant_id=tenant.id,
         quantity_used=payload.quantity_used,
         notes=payload.notes,
     )
-    if supply.track_stock and supply.stock_quantity is not None:
-        supply.stock_quantity -= payload.quantity_used
     db.add(usage)
+    db.flush()
+    audit_service.log(db, "supply_usage_added", "appointment_supply_usage", usage.id, tenant.id, current_user.id)
     db.commit()
     db.refresh(usage)
     return usage
 
 
-@router.delete("/appointments/{appointment_id}/supply-usage/{usage_id}")
+@usage_router.delete("/{appointment_id}/supply-usage/{usage_id}")
 def remove_supply_usage(
     appointment_id: uuid.UUID,
     usage_id: uuid.UUID,
     tenant: Tenant = Depends(require_active_tenant),
-    current_user: User = Depends(require_manager_or_above),
+    current_user: User = Depends(require_receptionist_or_above),
     db: Session = Depends(get_db),
 ):
     usage = db.query(AppointmentSupplyUsage).filter(
@@ -215,10 +286,11 @@ def remove_supply_usage(
         AppointmentSupplyUsage.tenant_id == tenant.id,
     ).first()
     if not usage:
-        raise NotFoundError("USAGE_NOT_FOUND", "Uso não encontrado.")
+        raise NotFoundError("USAGE_NOT_FOUND", "Registro de uso não encontrado.")
     supply = db.query(Supply).filter(Supply.id == usage.supply_id).first()
-    if supply and supply.track_stock and supply.stock_quantity is not None:
-        supply.stock_quantity += usage.quantity_used
+    if supply and supply.track_stock:
+        supply.stock_quantity = Decimal(str(supply.stock_quantity)) + Decimal(str(usage.quantity_used))
     db.delete(usage)
+    audit_service.log(db, "supply_usage_removed", "appointment_supply_usage", usage_id, tenant.id, current_user.id)
     db.commit()
-    return {"message": "Uso removido."}
+    return {"message": "Registro de uso removido."}

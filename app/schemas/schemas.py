@@ -522,9 +522,25 @@ class CustomerPortalAppointmentServiceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CustomerPortalProfessionalResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    photo_url: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerPortalUnitResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    address: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CustomerPortalAppointmentResponse(BaseModel):
     id: uuid.UUID
     professional_id: uuid.UUID
+    professional: Optional[CustomerPortalProfessionalResponse] = None
+    unit: Optional[CustomerPortalUnitResponse] = None
     start_datetime: datetime
     end_datetime: datetime
     total_duration_minutes: int

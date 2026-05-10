@@ -1,7 +1,9 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 import uuid
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.session import get_db
@@ -9,19 +11,34 @@ from app.core.dependencies import get_current_customer, get_public_tenant_by_slu
 from app.core.exceptions import NotFoundError, ForbiddenError, InvalidBookingPolicyError
 from app.models.customer import CustomerAccount, TenantCustomer
 from app.models.appointment import Appointment
+from app.models.future import AppointmentReview
 from app.models.package import CustomerPackage
 from app.models.procedure import ProcedureHistory
 from app.models.tenant import TenantBookingPolicy
-from app.models.future import AppointmentReview
-from app.models.product import ProductOrder
+from app.models.product import Product, ProductOrder, ProductOrderItem
 from app.services.appointment_service import appointment_service
 from app.schemas.auth import CustomerResponse
 from app.schemas.schemas import (
     CustomerProfileUpdate, CustomerPortalProfileResponse, AppointmentCancelRequest,
     AppointmentRescheduleRequest, CustomerPortalAppointmentResponse,
     CustomerPortalPackageResponse, CustomerPortalProcedureHistoryResponse,
-    ReviewCreate, ReviewResponse,
 )
+
+
+class ReviewCreateRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = None
+
+
+class ProductOrderItemCreate(BaseModel):
+    product_id: uuid.UUID
+    quantity: int = Field(1, ge=1, le=99)
+
+
+class ProductOrderCreate(BaseModel):
+    items: List[ProductOrderItemCreate]
+    delivery_type: str = "pickup"
+    notes: Optional[str] = None
 
 router = APIRouter(prefix="/customer", tags=["Portal do Cliente"])
 
@@ -155,75 +172,120 @@ def list_customer_procedure_history(slug: str, db: Session = Depends(get_db), cu
     return db.query(ProcedureHistory).filter(ProcedureHistory.tenant_id == tenant.id, ProcedureHistory.customer_account_id == current_customer.id).order_by(ProcedureHistory.procedure_date.desc()).all()
 
 
-@router.get("/tenants/{slug}/appointments/{appointment_id}/review", response_model=ReviewResponse)
-def get_appointment_review(slug: str, appointment_id: uuid.UUID, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
+@router.post("/tenants/{slug}/appointments/{appointment_id}/review", status_code=201)
+def submit_appointment_review(
+    slug: str,
+    appointment_id: uuid.UUID,
+    payload: ReviewCreateRequest,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
     tenant = get_public_tenant_by_slug(slug, db)
-    review = db.query(AppointmentReview).filter(
-        AppointmentReview.appointment_id == appointment_id,
-        AppointmentReview.tenant_id == tenant.id,
-        AppointmentReview.customer_account_id == current_customer.id,
+    appt = db.query(Appointment).filter(
+        Appointment.id == appointment_id,
+        Appointment.tenant_id == tenant.id,
+        Appointment.customer_account_id == current_customer.id,
+        Appointment.status == "completed",
     ).first()
-    if not review:
-        raise NotFoundError("REVIEW_NOT_FOUND", "Avaliação não encontrada.")
-    return review
-
-
-@router.post("/tenants/{slug}/appointments/{appointment_id}/review", response_model=ReviewResponse)
-def create_appointment_review(slug: str, appointment_id: uuid.UUID, payload: ReviewCreate, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
-    tenant = get_public_tenant_by_slug(slug, db)
-    appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.tenant_id == tenant.id, Appointment.customer_account_id == current_customer.id).first()
     if not appt:
-        raise NotFoundError("APPOINTMENT_NOT_FOUND", "Agendamento não encontrado.")
-    existing = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id, AppointmentReview.customer_account_id == current_customer.id).first()
+        raise HTTPException(404, "Agendamento não encontrado ou não concluído.")
+    existing = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id).first()
     if existing:
-        existing.rating = payload.rating
-        existing.comment = payload.comment
-        existing.visibility = payload.visibility
-        db.commit()
-        db.refresh(existing)
-        return existing
+        raise HTTPException(409, "Este agendamento já foi avaliado.")
     review = AppointmentReview(
         tenant_id=tenant.id,
         appointment_id=appointment_id,
         customer_account_id=current_customer.id,
         rating=payload.rating,
         comment=payload.comment,
-        visibility=payload.visibility,
+        visibility="public",
         created_at=datetime.now(timezone.utc),
     )
     db.add(review)
     db.commit()
     db.refresh(review)
-    return review
+    return {"id": str(review.id), "rating": review.rating, "comment": review.comment}
 
 
-@router.post("/tenants/{slug}/product-orders")
-def customer_create_product_order(slug: str, payload: dict, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
-    from app.models.product import Product
-    from decimal import Decimal
+@router.get("/tenants/{slug}/appointments/{appointment_id}/review")
+def get_appointment_review(
+    slug: str,
+    appointment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
     tenant = get_public_tenant_by_slug(slug, db)
-    items_data = []
+    appt = db.query(Appointment).filter(
+        Appointment.id == appointment_id,
+        Appointment.tenant_id == tenant.id,
+        Appointment.customer_account_id == current_customer.id,
+    ).first()
+    if not appt:
+        raise HTTPException(404, "Agendamento não encontrado.")
+    review = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id).first()
+    if not review:
+        return None
+    return {"id": str(review.id), "rating": review.rating, "comment": review.comment}
+
+
+@router.post("/tenants/{slug}/product-orders", status_code=201)
+def create_product_order(
+    slug: str,
+    payload: ProductOrderCreate,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
+    tenant = get_public_tenant_by_slug(slug, db)
+
+    requested_ids = [item.product_id for item in payload.items]
+    products_map = {
+        p.id: p for p in db.query(Product).filter(
+            Product.id.in_(requested_ids),
+            Product.tenant_id == tenant.id,
+            Product.is_active == True,
+            Product.deleted_at.is_(None),
+        ).all()
+    }
+
     total = Decimal("0")
-    for item in payload.get("items", []):
-        product = db.query(Product).filter(Product.id == item["product_id"], Product.tenant_id == tenant.id, Product.is_active == True).first()
+    items_data = []
+    for item in payload.items:
+        product = products_map.get(item.product_id)
         if not product:
-            raise NotFoundError("PRODUCT_NOT_FOUND", f"Produto não encontrado.")
-        qty = int(item.get("quantity", 1))
-        item_total = product.price * qty
-        total += item_total
-        items_data.append({"product_id": str(product.id), "product_name": product.name, "quantity": qty, "unit_price": float(product.price)})
-        if product.track_stock and product.stock_quantity is not None:
-            product.stock_quantity -= qty
+            raise HTTPException(404, "Produto não encontrado.")
+        subtotal = product.price * item.quantity
+        total += subtotal
+        items_data.append((product, item.quantity, subtotal))
+
+    delivery_label = "Retirada na loja" if payload.delivery_type == "pickup" else "Entrega (a combinar)"
+    notes_parts = [f"Entrega: {delivery_label}"]
+    if payload.notes:
+        notes_parts.append(f"Observação: {payload.notes}")
+
     order = ProductOrder(
         tenant_id=tenant.id,
         customer_account_id=current_customer.id,
-        customer_name=payload.get("customer_name", current_customer.name),
-        customer_phone=payload.get("customer_phone"),
-        items=items_data,
+        customer_name=current_customer.name,
+        customer_phone=current_customer.phone,
+        status="pending",
+        payment_status="pending",
+        payment_method=payload.delivery_type,
         total=total,
-        notes=payload.get("notes"),
+        notes="\n".join(notes_parts),
     )
     db.add(order)
+    db.flush()
+
+    for product, quantity, subtotal in items_data:
+        db.add(ProductOrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            product_name_snapshot=product.name,
+            unit_price=product.price,
+            quantity=quantity,
+            subtotal=subtotal,
+        ))
+
     db.commit()
     db.refresh(order)
-    return {"id": str(order.id), "total": float(order.total), "status": order.status, "items": order.items}
+    return {"id": str(order.id), "status": order.status, "total": float(order.total)}

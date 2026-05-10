@@ -41,6 +41,8 @@ class AuthService:
                 "email": user.email,
                 "role": user.role,
                 "tenant_id": str(user.tenant_id) if user.tenant_id else None,
+                "tenant_slug": user.tenant.slug if user.tenant else None,
+                "tenant_name": user.tenant.name if user.tenant else None,
                 "is_active": user.is_active,
             },
         }
