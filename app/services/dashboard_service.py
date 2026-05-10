@@ -6,6 +6,7 @@ from sqlalchemy import func
 from app.models.appointment import Appointment
 from app.models.customer import TenantCustomer
 from app.models.payment import Payment
+from app.models.professional import ProfessionalAvailability
 
 
 class DashboardService:
@@ -76,6 +77,40 @@ class DashboardService:
 
         total_customers = db.query(TenantCustomer).filter(TenantCustomer.tenant_id == tenant_id).count()
 
+        # Occupancy rate: booked minutes / total available minutes this month
+        booked_minutes = db.query(func.sum(Appointment.total_duration_minutes)).filter(
+            Appointment.tenant_id == tenant_id,
+            Appointment.start_datetime >= month_start,
+            Appointment.start_datetime < next_month,
+            Appointment.status.notin_(["cancelled", "no_show"]),
+        ).scalar() or 0
+
+        availabilities = db.query(ProfessionalAvailability).filter(
+            ProfessionalAvailability.tenant_id == tenant_id,
+            ProfessionalAvailability.is_available == True,
+        ).all()
+
+        total_available_minutes = 0
+        if availabilities:
+            current_day = month_start.date()
+            end_day = next_month.date()
+            while current_day < end_day:
+                weekday = current_day.weekday()  # 0=Mon, 6=Sun
+                for av in availabilities:
+                    if av.weekday == weekday and av.start_time and av.end_time:
+                        start_m = av.start_time.hour * 60 + av.start_time.minute
+                        end_m = av.end_time.hour * 60 + av.end_time.minute
+                        duration = end_m - start_m
+                        if av.break_start_time and av.break_end_time:
+                            duration -= (
+                                av.break_end_time.hour * 60 + av.break_end_time.minute
+                                - av.break_start_time.hour * 60 - av.break_start_time.minute
+                            )
+                        total_available_minutes += max(0, duration)
+                current_day += timedelta(days=1)
+
+        occupancy_rate = round(booked_minutes / total_available_minutes * 100, 1) if total_available_minutes > 0 else 0
+
         todays_serialized = [
             {
                 "id": str(a.id),
@@ -98,7 +133,7 @@ class DashboardService:
             "confirmed_count": confirmed_count,
             "cancelled_count": cancelled_count,
             "no_show_count": no_show_count,
-            "occupancy_rate": 0,
+            "occupancy_rate": occupancy_rate,
             "todays_appointments": todays_serialized,
         }
 
