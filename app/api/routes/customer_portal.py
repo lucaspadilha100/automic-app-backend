@@ -1,7 +1,8 @@
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import uuid
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.session import get_db
@@ -9,6 +10,7 @@ from app.core.dependencies import get_current_customer, get_public_tenant_by_slu
 from app.core.exceptions import NotFoundError, ForbiddenError, InvalidBookingPolicyError
 from app.models.customer import CustomerAccount, TenantCustomer
 from app.models.appointment import Appointment
+from app.models.future import AppointmentReview
 from app.models.package import CustomerPackage
 from app.models.procedure import ProcedureHistory
 from app.models.tenant import TenantBookingPolicy
@@ -19,6 +21,11 @@ from app.schemas.schemas import (
     AppointmentRescheduleRequest, CustomerPortalAppointmentResponse,
     CustomerPortalPackageResponse, CustomerPortalProcedureHistoryResponse,
 )
+
+
+class ReviewCreateRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = None
 
 router = APIRouter(prefix="/customer", tags=["Portal do Cliente"])
 
@@ -150,3 +157,59 @@ def get_customer_package(slug: str, customer_package_id: uuid.UUID, db: Session 
 def list_customer_procedure_history(slug: str, db: Session = Depends(get_db), current_customer: CustomerAccount = Depends(get_current_customer)):
     tenant = get_public_tenant_by_slug(slug, db)
     return db.query(ProcedureHistory).filter(ProcedureHistory.tenant_id == tenant.id, ProcedureHistory.customer_account_id == current_customer.id).order_by(ProcedureHistory.procedure_date.desc()).all()
+
+
+@router.post("/tenants/{slug}/appointments/{appointment_id}/review", status_code=201)
+def submit_appointment_review(
+    slug: str,
+    appointment_id: uuid.UUID,
+    payload: ReviewCreateRequest,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
+    tenant = get_public_tenant_by_slug(slug, db)
+    appt = db.query(Appointment).filter(
+        Appointment.id == appointment_id,
+        Appointment.tenant_id == tenant.id,
+        Appointment.customer_account_id == current_customer.id,
+        Appointment.status == "completed",
+    ).first()
+    if not appt:
+        raise HTTPException(404, "Agendamento não encontrado ou não concluído.")
+    existing = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id).first()
+    if existing:
+        raise HTTPException(409, "Este agendamento já foi avaliado.")
+    review = AppointmentReview(
+        tenant_id=tenant.id,
+        appointment_id=appointment_id,
+        customer_account_id=current_customer.id,
+        rating=payload.rating,
+        comment=payload.comment,
+        visibility="public",
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+    return {"id": str(review.id), "rating": review.rating, "comment": review.comment}
+
+
+@router.get("/tenants/{slug}/appointments/{appointment_id}/review")
+def get_appointment_review(
+    slug: str,
+    appointment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_customer: CustomerAccount = Depends(get_current_customer),
+):
+    tenant = get_public_tenant_by_slug(slug, db)
+    appt = db.query(Appointment).filter(
+        Appointment.id == appointment_id,
+        Appointment.tenant_id == tenant.id,
+        Appointment.customer_account_id == current_customer.id,
+    ).first()
+    if not appt:
+        raise HTTPException(404, "Agendamento não encontrado.")
+    review = db.query(AppointmentReview).filter(AppointmentReview.appointment_id == appointment_id).first()
+    if not review:
+        return None
+    return {"id": str(review.id), "rating": review.rating, "comment": review.comment}
