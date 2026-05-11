@@ -35,6 +35,7 @@ class Coupon(Base, UUIDPrimaryKey, TimestampMixin):
     starts_at = Column(DateTime(timezone=True), nullable=True)
     ends_at = Column(DateTime(timezone=True), nullable=True)
     usage_limit = Column(Integer, nullable=True)
+    times_used = Column(Integer, nullable=False, server_default='0')
     is_active = Column(Boolean, default=True, nullable=False)
 
     __table_args__ = (
