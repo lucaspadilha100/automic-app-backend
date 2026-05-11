@@ -15,9 +15,12 @@ from app.models.professional import Professional
 from app.models.schedule import BusinessHour
 from app.models.procedure_photo import ProcedurePhoto, PhotoVisibility
 from app.models.media import MediaFile
+from app.models.future import Coupon
 from app.services.appointment_service import appointment_service
 from app.services.audit_service import audit_service
 from app.schemas.schemas import AppointmentCreate, AppointmentResponse, AppointmentCancelRequest
+from datetime import datetime, timezone
+from fastapi import HTTPException
 
 router = APIRouter(prefix="/public", tags=["Página Pública de Agendamento"])
 
@@ -178,6 +181,20 @@ def book_public(
         db.add(tc)
         db.flush()
 
+    # Validate and apply coupon if provided
+    if payload.coupon_code:
+        coupon = db.query(Coupon).filter(
+            Coupon.tenant_id == tenant.id,
+            Coupon.code == payload.coupon_code.upper(),
+            Coupon.is_active == True,
+        ).first()
+        if coupon:
+            now = datetime.now(timezone.utc)
+            if (not coupon.starts_at or coupon.starts_at <= now) and \
+               (not coupon.ends_at or coupon.ends_at >= now) and \
+               (not coupon.usage_limit or (coupon.times_used or 0) < coupon.usage_limit):
+                coupon.times_used = (coupon.times_used or 0) + 1
+
     appt = appointment_service.create(
         db=db,
         tenant=tenant,
@@ -194,6 +211,42 @@ def book_public(
     db.commit()
     db.refresh(appt)
     return appt
+
+
+@router.get("/{slug}/coupons/validate")
+def validate_coupon_public(
+    slug: str,
+    code: str = Query(...),
+    amount: float = Query(0),
+    db: Session = Depends(get_db),
+):
+    """Validates a coupon code for a given total amount."""
+    tenant = get_public_tenant_by_slug(slug, db)
+    coupon = db.query(Coupon).filter(
+        Coupon.tenant_id == tenant.id,
+        Coupon.code == code.upper(),
+        Coupon.is_active == True,
+    ).first()
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Cupom não encontrado ou inativo")
+    now = datetime.now(timezone.utc)
+    if coupon.starts_at and coupon.starts_at > now:
+        raise HTTPException(status_code=400, detail="Cupom ainda não é válido")
+    if coupon.ends_at and coupon.ends_at < now:
+        raise HTTPException(status_code=400, detail="Cupom expirado")
+    if coupon.usage_limit and (coupon.times_used or 0) >= coupon.usage_limit:
+        raise HTTPException(status_code=400, detail="Limite de usos atingido")
+    if coupon.discount_type == 'percentage':
+        discount = round(amount * float(coupon.discount_value) / 100, 2)
+    else:
+        discount = round(min(float(coupon.discount_value), amount), 2)
+    return {
+        "code": coupon.code,
+        "discount_type": coupon.discount_type,
+        "discount_value": float(coupon.discount_value),
+        "discount_amount": discount,
+        "final_amount": round(amount - discount, 2),
+    }
 
 
 @router.post("/{slug}/appointments/{appointment_id}/cancel")

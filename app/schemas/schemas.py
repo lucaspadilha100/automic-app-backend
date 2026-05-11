@@ -156,7 +156,7 @@ class BlockedTimeResponse(BaseModel):
 # ---- Appointment Schemas ----
 
 class AppointmentCreate(BaseModel):
-    professional_id: uuid.UUID
+    professional_id: Optional[uuid.UUID] = None
     service_ids: List[uuid.UUID]
     start_datetime: datetime
     customer_notes: Optional[str] = None
@@ -166,6 +166,7 @@ class AppointmentCreate(BaseModel):
     customer_package_id: Optional[uuid.UUID] = None
     idempotency_key: Optional[str] = None
     unit_id: Optional[uuid.UUID] = None
+    coupon_code: Optional[str] = None
 
 
 class AppointmentServiceSnapshot(BaseModel):
@@ -477,6 +478,7 @@ class CouponResponse(BaseModel):
     starts_at: Optional[datetime] = None
     ends_at: Optional[datetime] = None
     usage_limit: Optional[int] = None
+    times_used: int = 0
     is_active: bool
     unit_id: Optional[uuid.UUID] = None
     service_ids: Optional[List[uuid.UUID]] = None
