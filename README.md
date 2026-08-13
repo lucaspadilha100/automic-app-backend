@@ -512,36 +512,26 @@ Resultado esperado (sem banco disponível): **44 passed, 1 skipped**
 
 ## Deploy
 
-### Host sempre ligado (recomendado) — Railway ou Render
+### Vercel (produção atual)
 
-Em serverless (Vercel), o processo Python é derrubado após alguns minutos sem
-uso e precisa subir de novo na próxima requisição — são 1-3s de espera só para
-importar a aplicação, cobrados do primeiro usuário a chegar. Num host com
-processo permanente esse custo é pago uma vez no deploy: depois disso as
-respostas saem em milissegundos.
+O deploy é automático a cada push na `main`. `vercel.json` cuida de tudo:
+`alembic upgrade head` roda no build e `api/index.py` expõe a aplicação.
 
-**Railway** — `railway.json` já está no repositório:
+Duas configurações importam para a velocidade em serverless:
 
-1. Novo projeto → *Deploy from GitHub repo* → escolha este repositório.
-2. Em **Variables**, defina no mínimo:
-   ```
-   DATABASE_URL=postgresql://...   # a mesma string do Supabase
-   SECRET_KEY=<32+ caracteres>
-   ENVIRONMENT=production
-   DB_POOL_SIZE=10
-   DB_MAX_OVERFLOW=20
-   ```
-3. O deploy usa o `Dockerfile`, roda `alembic upgrade head` e sobe o uvicorn na
-   porta que a Railway injeta via `$PORT`.
-4. Em **Settings → Networking**, gere o domínio público.
+- **Memória da função** — na Vercel, memória e CPU andam juntas. `vercel.json`
+  pede 3008 MB porque o custo dominante de um cold start é importar FastAPI,
+  SQLAlchemy e psycopg2, e isso é puro CPU. Reduzir a memória deixa o cold
+  start mais lento, não mais barato.
+- **Região** — a função deve ficar na mesma região do projeto Supabase, senão
+  toda query atravessa o continente. Confira em *Supabase → Settings → General
+  → Region* e ajuste `regions` em `vercel.json`: `gru1` para São Paulo
+  (sa-east-1), `iad1` para o leste dos EUA (us-east-1).
 
-**Render** — `render.yaml` já está no repositório: *New → Blueprint*, aponte
-para o repo e preencha `DATABASE_URL`. Evite o plano gratuito: ele hiberna por
-inatividade, o que traz o cold start de volta.
-
-Depois de qualquer um dos dois, aponte o frontend para o novo endereço
-(`VITE_API_URL` na Vercel do frontend) e faça o redeploy dele. O CORS já aceita
-qualquer subdomínio `*.vercel.app`, então nada precisa mudar no backend.
+Vale também usar a **connection string do pooler** do Supabase (porta 6543, o
+host com `pooler` no nome) em vez da conexão direta na 5432. Em serverless cada
+instância abre suas próprias conexões, e o pooler é o que evita esgotar o
+limite do banco. É só trocar o valor de `DATABASE_URL` nas variáveis da Vercel.
 
 ### Produção com Docker
 
