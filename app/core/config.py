@@ -38,6 +38,12 @@ class Settings(BaseSettings):
             return [i.strip() for i in v.split(",") if i.strip()]
         return v
 
+    # SQLAlchemy pool. 0 means "pick by environment" — see db/session.py. Set
+    # these on an always-on host (Railway/Render), where one process handles all
+    # traffic and can afford a real pool.
+    DB_POOL_SIZE: int = 0
+    DB_MAX_OVERFLOW: int = 0
+
     # Run `alembic upgrade head` when the app boots. Off by default: the Vercel
     # buildCommand already migrates, and doing it per cold start makes the first
     # request after every scale-up time out.

@@ -24,4 +24,6 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so ${PORT} expands: Railway, Render and Fly assign the port at
+# runtime and route only to that one. Falls back to 8000 for local `docker run`.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
