@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: Union[str, List[str]] = []
 
+    # Regex matched against the request Origin, checked in addition to the list
+    # above. The default covers localhost during development and every
+    # *.vercel.app deployment (production domain and preview builds alike), so
+    # renaming the frontend project does not lock the API out.
+    BACKEND_CORS_ORIGIN_REGEX: str = (
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+        r"|^https://([a-zA-Z0-9-]+\.)*vercel\.app$"
+    )
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v):
