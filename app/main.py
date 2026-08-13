@@ -70,16 +70,21 @@ from app.api.routes.master_ops import router as master_ops_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run migrations on startup as safety net (timeout prevents Vercel cold-start hang)
-    import subprocess, sys
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            capture_output=True,
-            timeout=25,
-        )
-    except Exception:
-        pass  # Don't block startup if alembic fails or times out
+    # Migrations run at build time (see vercel.json buildCommand), so by default we
+    # do NOT run them here. On serverless every cold start would otherwise pay for
+    # an `alembic upgrade head` subprocess — up to 25s — and the first request after
+    # each scale-up would blow past the platform's function timeout and fail.
+    # Set RUN_MIGRATIONS_ON_STARTUP=true for hosts with no build step of their own.
+    if settings.RUN_MIGRATIONS_ON_STARTUP:
+        import subprocess, sys
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                capture_output=True,
+                timeout=25,
+            )
+        except Exception:
+            pass  # Don't block startup if alembic fails or times out
     yield
 from app.api.routes.master_invoices import (
     router as master_invoices_router,

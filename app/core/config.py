@@ -38,6 +38,11 @@ class Settings(BaseSettings):
             return [i.strip() for i in v.split(",") if i.strip()]
         return v
 
+    # Run `alembic upgrade head` when the app boots. Off by default: the Vercel
+    # buildCommand already migrates, and doing it per cold start makes the first
+    # request after every scale-up time out.
+    RUN_MIGRATIONS_ON_STARTUP: bool = False
+
     # First Super Admin (seed)
     FIRST_SUPER_ADMIN_EMAIL: str = "admin@automiq.com.br"
     FIRST_SUPER_ADMIN_PASSWORD: str = "AutomIQ@2024!"
