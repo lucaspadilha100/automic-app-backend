@@ -112,11 +112,17 @@ app = FastAPI(
 )
 
 # ---- CORS ----
+# Auth travels as a Bearer token in the Authorization header (no cookies), so we
+# never need allow_credentials. That lets us accept origins by regex, which keeps
+# the API reachable when the frontend domain changes or a Vercel preview build
+# gets its own hostname — without redeploying the backend to edit an allowlist.
 _cors_origins = settings.BACKEND_CORS_ORIGINS or ["*"]
+_cors_origin_regex = settings.BACKEND_CORS_ORIGIN_REGEX or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=bool(settings.BACKEND_CORS_ORIGINS),
+    allow_origin_regex=_cors_origin_regex,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
