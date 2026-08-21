@@ -169,7 +169,7 @@ def register_manual_payment(
     try:
         audit_service.log(
             db, "manual_payment_registered", "tenant", tenant.id,
-            user_id=current_user.id,
+            tenant_id=tenant.id, user_id=current_user.id,
             new_values={
                 "invoice_id": str(invoice.id),
                 "amount": str(payload.amount),
@@ -230,7 +230,7 @@ def update_billing_mode(
     try:
         audit_service.log(
             db, "billing_mode_changed", "tenant_subscription", sub.id,
-            user_id=current_user.id,
+            tenant_id=tenant.id, user_id=current_user.id,
             old_values={"billing_mode": old_mode},
             new_values={"billing_mode": payload.billing_mode},
         )

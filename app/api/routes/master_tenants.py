@@ -41,6 +41,22 @@ def create_tenant(
     current_user: User = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ):
+    # The owner block is optional, but partially filled it used to be dropped in
+    # silence while the response still reported success — the caller believed an
+    # owner had been created. Demand all three together or none.
+    owner_fields = [owner_email, owner_name, owner_password]
+    if any(owner_fields) and not all(owner_fields):
+        from app.core.exceptions import ValidationError
+        raise ValidationError(
+            "Para criar o proprietário, informe nome, e-mail e senha. "
+            "Deixe os três em branco para criar a empresa sem proprietário.",
+            {"missing": [
+                name for name, value in
+                (("owner_name", owner_name), ("owner_email", owner_email), ("owner_password", owner_password))
+                if not value
+            ]},
+        )
+
     tenant = Tenant(**payload.model_dump())
     db.add(tenant)
     db.flush()
@@ -92,7 +108,7 @@ def create_tenant(
         )
         db.add(owner)
 
-    audit_service.log(db, "tenant_created", "tenant", tenant.id, user_id=current_user.id)
+    audit_service.log(db, "tenant_created", "tenant", tenant.id, tenant_id=tenant.id, user_id=current_user.id)
     # Owner notification — advisory, never breaks the flow
     owner_notification_service.emit_tenant_signup(db, tenant.id, tenant.name)
     db.commit()
@@ -130,7 +146,7 @@ def update_tenant(
 ):
     for k, v in payload.model_dump(exclude_none=True).items():
         setattr(tenant, k, v)
-    audit_service.log(db, "tenant_updated", "tenant", tenant.id, user_id=current_user.id)
+    audit_service.log(db, "tenant_updated", "tenant", tenant.id, tenant_id=tenant.id, user_id=current_user.id)
     db.commit()
     db.refresh(tenant)
     return tenant
@@ -146,7 +162,7 @@ def update_tenant_status(
     old_status = tenant.status
     tenant.status = payload.status
     audit_service.log(db, f"tenant_{payload.status}", "tenant", tenant.id,
-                      user_id=current_user.id, old_values={"status": old_status}, new_values={"status": payload.status})
+                      tenant_id=tenant.id, user_id=current_user.id, old_values={"status": old_status}, new_values={"status": payload.status})
     if old_status != payload.status:
         owner_notification_service.emit_tenant_status_change(
             db, tenant.id, tenant.name, old_status, payload.status,
@@ -295,19 +311,19 @@ def update_subscription(
     # Generic subscription_updated log always fires.
     audit_service.log(
         db, "subscription_updated", "tenant", tenant.id,
-        user_id=current_user.id, old_values=before, new_values=after,
+        tenant_id=tenant.id, user_id=current_user.id, old_values=before, new_values=after,
     )
     if plan_changed:
         audit_service.log(
             db, "subscription_plan_changed", "tenant", tenant.id,
-            user_id=current_user.id,
+            tenant_id=tenant.id, user_id=current_user.id,
             old_values={"plan_id": before.get("plan_id")},
             new_values={"plan_id": after["plan_id"]},
         )
     if price_changed:
         audit_service.log(
             db, "subscription_custom_price_updated", "tenant", tenant.id,
-            user_id=current_user.id,
+            tenant_id=tenant.id, user_id=current_user.id,
             old_values={"custom_price_monthly": before.get("custom_price_monthly")},
             new_values={
                 "custom_price_monthly": after["custom_price_monthly"],
@@ -345,7 +361,11 @@ def update_limit_overrides(
         before = {k: getattr(override, k) for k in LIMIT_KEYS}
         before["notes"] = override.notes
 
-    new_data = payload.model_dump(exclude_none=True)
+    # exclude_unset, not exclude_none: null is a meaningful value here — it clears
+    # the override so the limit falls back to the plan's. Dropping nulls made a
+    # cleared field impossible to save, since only omitted fields should be left
+    # untouched.
+    new_data = payload.model_dump(exclude_unset=True)
 
     if override:
         for k, v in new_data.items():
@@ -362,13 +382,13 @@ def update_limit_overrides(
         if before.get(k) != after.get(k):
             audit_service.log(
                 db, "limit_override_changed", "tenant", tenant.id,
-                user_id=current_user.id,
+                tenant_id=tenant.id, user_id=current_user.id,
                 old_values={k: before.get(k)},
                 new_values={k: after.get(k)},
             )
     audit_service.log(
         db, "limit_override_updated", "tenant", tenant.id,
-        user_id=current_user.id, old_values=before, new_values=after,
+        tenant_id=tenant.id, user_id=current_user.id, old_values=before, new_values=after,
     )
 
     db.commit()
@@ -419,7 +439,7 @@ def update_feature(
 
     audit_service.log(
         db, "feature_flag_updated", "tenant", tenant.id,
-        user_id=current_user.id,
+        tenant_id=tenant.id, user_id=current_user.id,
         old_values={"feature_key": payload.feature_key, "enabled": old_enabled},
         new_values={"feature_key": payload.feature_key, "enabled": payload.enabled, "source": payload.source},
     )
