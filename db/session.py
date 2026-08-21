@@ -1,3 +1,4 @@
+import re
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
@@ -22,6 +23,45 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def scrub_credentials(value: object, limit: int = 300) -> str:
+    """Render an error (or any text) with connection-string passwords removed.
+
+    Driver errors frequently echo the URL they failed to connect to, so anything
+    derived from them has to be laundered before it reaches a response body.
+    """
+    return re.sub(r"://[^@/\s]+@", "://***@", str(value))[:limit]
+
+
+def describe_target() -> dict:
+    """Where the app is pointed, with credentials stripped.
+
+    DATABASE_URL is normally write-only in a hosting dashboard, which leaves no
+    way to confirm which database a deployment is actually talking to. This
+    exposes the harmless half of the URL — never the user or the password — and
+    pulls out the Supabase project ref, which is encoded either in the direct
+    host (``db.<ref>.supabase.co``) or in the pooler username (``postgres.<ref>``).
+    """
+    url = engine.url
+    host = url.host or ""
+    info: dict = {"host": host, "port": url.port, "database": url.database}
+
+    ref = None
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        ref = host.split(".")[1]
+    elif "pooler.supabase.com" in host and url.username and "." in url.username:
+        ref = url.username.split(".", 1)[1]
+    if ref:
+        info["supabase_project_ref"] = ref
+        info["supabase_dashboard"] = f"https://supabase.com/dashboard/project/{ref}"
+
+    region = re.search(r"aws-\d+-([a-z]{2}-[a-z]+-\d)", host)
+    if region:
+        info["region"] = region.group(1)
+
+    info["pooled"] = url.port == 6543 or "pooler." in host
+    return info
 
 
 def get_db() -> Generator[Session, None, None]:

@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -136,6 +138,31 @@ app.add_middleware(
 app.add_middleware(RequestContextMiddleware)
 
 # ---- Exception Handlers ----
+# A database that refuses connections (paused project, rotated password, wrong
+# host) otherwise surfaces as an unhandled crash. On a serverless platform the
+# crash response is written by the platform, not by us, so it carries no CORS
+# headers and the browser reports the whole thing as a CORS failure — hiding the
+# actual cause. Answering 503 ourselves keeps the response inside the middleware
+# stack, so the frontend receives a readable error instead of "Network Error".
+@app.exception_handler(OperationalError)
+def database_unavailable_handler(request, exc):
+    from db.session import scrub_credentials
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "code": "DATABASE_UNAVAILABLE",
+                "message": (
+                    "Não foi possível conectar ao banco de dados. "
+                    "Verifique se o projeto Supabase está ativo e se DATABASE_URL está correta."
+                ),
+                "detail": scrub_credentials(exc),
+            }
+        },
+    )
+
+
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -234,20 +261,27 @@ def health_ready():
     Returns 503 with details if any dependency is unhealthy.
     """
     import os
-    from db.session import engine
+    from db.session import engine, describe_target, scrub_credentials
     from sqlalchemy import text
     from fastapi.responses import JSONResponse
 
     deps = {}
     overall_ok = True
 
-    # Postgres check
+    # Postgres check. `target` reports which database this deployment is wired
+    # to (host, region, Supabase project) so the answer does not depend on being
+    # able to read DATABASE_URL back out of the hosting dashboard.
+    target = describe_target()
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        deps["database"] = {"status": "up"}
+        deps["database"] = {"status": "up", "target": target}
     except Exception as e:
-        deps["database"] = {"status": "down", "detail": str(e)[:200]}
+        deps["database"] = {
+            "status": "down",
+            "target": target,
+            "detail": scrub_credentials(e, 200),
+        }
         overall_ok = False
 
     # Redis check (optional)
@@ -273,18 +307,23 @@ def health_ready():
 @app.get("/health/db", tags=["Health"])
 def health_db():
     """Verifica conexão com o banco de dados."""
-    from db.session import engine
+    from db.session import engine, describe_target, scrub_credentials
     from sqlalchemy import text
+    target = describe_target()
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return {"status": "ok", "database": "connected"}
+        return {"status": "ok", "database": "connected", "target": target}
     except Exception as e:
-        from fastapi import Response
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "database": "disconnected", "detail": str(e)},
+            content={
+                "status": "error",
+                "database": "disconnected",
+                "target": target,
+                "detail": scrub_credentials(e),
+            },
         )
 
 
