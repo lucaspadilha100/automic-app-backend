@@ -124,3 +124,49 @@ def check_low_stock(
         "low_stock_products": low_stock_products,
         "low_stock_supplies": low_stock_supplies,
     }
+
+
+@router.get("/ops/schema-state")
+def schema_state(
+    current_user: User = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Which migrations the database believes it has applied, and what it actually has.
+
+    The migration history forked at 0021 into two chains that both create the
+    products/supplies tables, so `alembic upgrade head` refuses to run. Repairing
+    that safely depends on which chain this database actually followed, and the
+    alembic_version table plus the presence of the disputed tables is the only
+    way to tell from outside.
+    """
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(db.get_bind())
+    tables = set(inspector.get_table_names())
+
+    try:
+        applied = sorted(r[0] for r in db.execute(text("SELECT version_num FROM alembic_version")))
+    except Exception as exc:
+        applied = f"não foi possível ler alembic_version: {type(exc).__name__}"
+
+    def columns(table: str) -> list:
+        return sorted(c["name"] for c in inspector.get_columns(table)) if table in tables else []
+
+    return {
+        "alembic_version": applied,
+        # Only the ecommerce chain creates these two; their presence says which
+        # chain ran. The plural spelling belongs to the duplicate chain.
+        "chain_markers": {
+            "appointment_supply_usage (correto, model)": "appointment_supply_usage" in tables,
+            "appointment_supply_usages (duplicata)": "appointment_supply_usages" in tables,
+            "product_order_items (só na cadeia correta)": "product_order_items" in tables,
+        },
+        "shared_tables_present": {
+            t: t in tables for t in ("products", "product_categories", "product_orders", "supplies")
+        },
+        "branch_b_changes_applied": {
+            "tenant_settings.page_sections": "page_sections" in columns("tenant_settings"),
+            "payments.registered_by_user_id": "registered_by_user_id" in columns("payments"),
+        },
+        "plans.allow_page_customization": "allow_page_customization" in columns("plans"),
+    }
