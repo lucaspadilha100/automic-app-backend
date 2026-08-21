@@ -27,6 +27,20 @@ class TenantUpdate(BaseModel):
     instagram: Optional[str] = None
     website: Optional[str] = None
 
+    @field_validator("name", "slug", "timezone")
+    @classmethod
+    def _reject_blank(cls, v: Optional[str]) -> Optional[str]:
+        """These three are NOT NULL in the model and no tenant works without them.
+
+        Every field here is Optional so the update can be partial — omitting one
+        leaves it untouched. But an explicit null, or a blank string the column
+        would accept without complaint, would leave the tenant broken. Validators
+        do not run for omitted fields, so this only rejects a deliberate blank.
+        """
+        if v is None or not v.strip():
+            raise ValueError("não pode ficar em branco")
+        return v
+
 
 class TenantStatusUpdate(BaseModel):
     status: str  # active | inactive | suspended | cancelled | trial

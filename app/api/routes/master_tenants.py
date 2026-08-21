@@ -144,7 +144,10 @@ def update_tenant(
     current_user: User = Depends(require_super_admin),
     db: Session = Depends(get_db),
 ):
-    for k, v in payload.model_dump(exclude_none=True).items():
+    # exclude_unset, not exclude_none: an omitted field stays untouched, while an
+    # explicit null clears an optional one. TenantUpdate rejects a blank name,
+    # slug or timezone, so no null can reach a NOT NULL column here.
+    for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(tenant, k, v)
     audit_service.log(db, "tenant_updated", "tenant", tenant.id, tenant_id=tenant.id, user_id=current_user.id)
     db.commit()
@@ -583,7 +586,7 @@ def update_settings(
     if not settings:
         settings = TenantSettings(tenant_id=tenant.id)
         db.add(settings)
-    for k, v in payload.model_dump(exclude_none=True).items():
+    for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(settings, k, v)
     db.commit()
     return {"message": "Configurações atualizadas."}
@@ -617,7 +620,7 @@ def update_theme(
     if not theme:
         theme = TenantTheme(tenant_id=tenant.id)
         db.add(theme)
-    for k, v in payload.model_dump(exclude_none=True).items():
+    for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(theme, k, v)
     db.commit()
     return {"message": "Tema atualizado."}
