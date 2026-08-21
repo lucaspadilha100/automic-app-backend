@@ -151,14 +151,13 @@ def database_unavailable_handler(request, exc):
     return JSONResponse(
         status_code=503,
         content={
-            "error": {
-                "code": "DATABASE_UNAVAILABLE",
-                "message": (
-                    "Não foi possível conectar ao banco de dados. "
-                    "Verifique se o projeto Supabase está ativo e se DATABASE_URL está correta."
-                ),
-                "detail": scrub_credentials(exc),
-            }
+            "error": True,
+            "code": "DATABASE_UNAVAILABLE",
+            "message": (
+                "Não foi possível conectar ao banco de dados. "
+                "Verifique se o projeto Supabase está ativo e se DATABASE_URL está correta."
+            ),
+            "details": {"reason": scrub_credentials(exc)},
         },
     )
 
